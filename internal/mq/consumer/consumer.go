@@ -8,7 +8,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/rabbitmq/amqp091-go"
 	"log"
-	"time"
 )
 
 type CMq interface {
@@ -31,7 +30,7 @@ func NewConsumer(config *config.Config, mqConn *amqp091.Connection, mqChannel *a
 	consumer := &Consumer{config: config, mqConn: mqConn, mqChannel: mqChannel, noOfWorker: config.NoOfWorker}
 
 	//for i := 0; i < config.NoOfWorker; i++ {
-	go consumer.startWorker()
+
 	//}
 	return consumer
 }
@@ -40,6 +39,8 @@ func (c *Consumer) startWorker() {
 	log.Println("start worker job")
 
 	for {
+		log.Println("iteration...")
+
 		select {
 		case msg := <-c.delivery:
 			log.Printf("message recevied %v", msg)
@@ -52,14 +53,7 @@ func (c *Consumer) startWorker() {
 				continue
 			}
 			sendMessageToAll(msgSchema)
-		case <-time.After(time.Millisecond * 100):
-			log.Println("worker stopped for 100ms so that consumer can setup")
-			continue
 		}
-		//select {
-		//case msg := <-c.messageCh:
-		//	sendMessageToAll(msg)
-		//}
 	}
 	log.Println("end worker job")
 }
@@ -104,6 +98,10 @@ func (c *Consumer) Consume() error {
 	//
 	//	c.messageCh <- msgSchema
 	//}
+	for i := 0; i < c.config.NoOfWorker; i++ {
+		go c.startWorker()
+	}
+	//go c.startWorker()
 	log.Println("end consume message from user")
 	return nil
 }

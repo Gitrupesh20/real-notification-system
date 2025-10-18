@@ -6,6 +6,7 @@ import (
 	"github.com/rabbitmq/amqp091-go"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -14,6 +15,12 @@ type PushNotificationHandler struct {
 	producerConn *amqp091.Connection
 	channel      *amqp091.Channel
 	queue        *amqp091.Queue
+	c            *counter
+}
+
+type counter struct {
+	mu    sync.RWMutex
+	count int
 }
 
 func NewPushNotificationHandler(prodConn *amqp091.Connection, channel *amqp091.Channel, queue string) (*PushNotificationHandler, error) {
@@ -28,12 +35,17 @@ func NewPushNotificationHandler(prodConn *amqp091.Connection, channel *amqp091.C
 		channel:      channel,
 		queueName:    queue,
 		queue:        &q,
+		c:            &counter{count: 0},
 	}, nil
 }
 
 func (n *PushNotificationHandler) PushNotification(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	var rawMsg Message
+	n.c.mu.Lock()
+	n.c.count++
+	log.Println("Rupesh ", n.c.count)
+	n.c.mu.Unlock()
 
 	if err := json.NewDecoder(r.Body).Decode(&rawMsg); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -67,7 +79,7 @@ func (n *PushNotificationHandler) PushNotification(w http.ResponseWriter, r *htt
 		w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
 		return
 	}
-	time.Sleep(time.Millisecond * 200)
+	//	time.Sleep(time.Millisecond * 200)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(http.StatusText(http.StatusOK)))
 
