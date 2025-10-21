@@ -4,40 +4,32 @@ import (
 	"errors"
 	"github.com/Gitrupesh20/real-time-notification-system/cmd/config"
 	"github.com/Gitrupesh20/real-time-notification-system/internal/mq/consumer"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/mq/rabbitMq"
 	"github.com/Gitrupesh20/real-time-notification-system/internal/server"
 	"github.com/rabbitmq/amqp091-go"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
 func main() {
 	conf := config.LoadConfig()
 
-	mqConn, err := connectRabbitMq(conf.MqAddr, conf.MqQueueName)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer mqConn.Close()
-	mqChannel, err := mqConn.Channel()
+	mq := rabbitMq.NewRabbitMessageQueue(conf)
 
+	<-time.After(1 * time.Second)
 	//setup route and producer
-	newRoute := server.NewRoute(&conf, mqConn, mqChannel)
+	newRoute := server.NewRoute(&conf, mq)
 	handler := newRoute.RegisterRoute()
 	if handler == nil {
 		log.Fatal("handler is nil")
 		return
 	}
-	defer mqChannel.Close()
 	//setup consumer and worker
 
-	w := consumer.NewConsumer(&conf, mqConn, mqChannel)
+	_ = consumer.NewConsumer(&conf, mq)
 	//start
-
-	err = w.Consume()
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	log.Printf("Server Started in port %s....", conf.Port)
 	if err := http.ListenAndServe(":"+conf.Port, handler); err != nil {

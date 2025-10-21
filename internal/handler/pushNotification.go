@@ -1,51 +1,30 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/rabbitmq/amqp091-go"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/mq/rabbitMq"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 )
 
 type PushNotificationHandler struct {
-	queueName    string
-	producerConn *amqp091.Connection
-	channel      *amqp091.Channel
-	queue        *amqp091.Queue
-	c            *counter
+	queueName string
+	messageQ  *rabbitMq.MessageQueue
 }
 
-type counter struct {
-	mu    sync.RWMutex
-	count int
-}
-
-func NewPushNotificationHandler(prodConn *amqp091.Connection, channel *amqp091.Channel, queue string) (*PushNotificationHandler, error) {
-	q, err := channel.QueueDeclare(queue, false, false, false, false, nil)
-	if err != nil {
-		log.Printf("failed to declare queue %s: %v", queue, err)
-		return nil, err
-	}
+func NewPushNotificationHandler(mq *rabbitMq.MessageQueue) (*PushNotificationHandler, error) {
 
 	return &PushNotificationHandler{
-		producerConn: prodConn,
-		channel:      channel,
-		queueName:    queue,
-		queue:        &q,
-		c:            &counter{count: 0},
+		messageQ: mq,
 	}, nil
 }
 
 func (n *PushNotificationHandler) PushNotification(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	var rawMsg Message
-	n.c.mu.Lock()
-	n.c.count++
-	log.Println("Rupesh ", n.c.count)
-	n.c.mu.Unlock()
 
 	if err := json.NewDecoder(r.Body).Decode(&rawMsg); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -69,17 +48,17 @@ func (n *PushNotificationHandler) PushNotification(w http.ResponseWriter, r *htt
 		return
 	}
 
-	err = n.channel.Publish("", n.queue.Name, false, false, amqp091.Publishing{
-		ContentType: "application/json",
-		Body:        bytes,
-	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = n.messageQ.Publish(ctx, bytes)
 	if err != nil {
 		log.Printf("Failed to publish msg: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
 		return
 	}
-	//	time.Sleep(time.Millisecond * 200)
+
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(http.StatusText(http.StatusOK)))
 

@@ -4,23 +4,21 @@ import (
 	"fmt"
 	"github.com/Gitrupesh20/real-time-notification-system/cmd/config"
 	"github.com/Gitrupesh20/real-time-notification-system/internal/handler"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/mq/rabbitMq"
 	"github.com/go-chi/chi/v5"
-	"github.com/rabbitmq/amqp091-go"
 	"log"
 	"net/http"
 )
 
 type Routes struct {
 	config    config.Config
-	mqConn    *amqp091.Connection
-	mqChannel *amqp091.Channel
+	MessagesQ *rabbitMq.MessageQueue
 }
 
-func NewRoute(config *config.Config, mqConn *amqp091.Connection, mqCh *amqp091.Channel) *Routes {
+func NewRoute(config *config.Config, mq *rabbitMq.MessageQueue) *Routes {
 	return &Routes{
 		config:    *config,
-		mqConn:    mqConn,
-		mqChannel: mqCh,
+		MessagesQ: mq,
 	}
 }
 
@@ -28,7 +26,7 @@ func (r *Routes) RegisterRoute() http.Handler {
 	h := chi.NewRouter()
 
 	ws := handler.NewWS(r.config)
-	notify, err := handler.NewPushNotificationHandler(r.mqConn, r.mqChannel, r.config.MqQueueName)
+	notify, err := handler.NewPushNotificationHandler(r.MessagesQ)
 	if err != nil {
 		log.Printf("failed to register push notification handler: %v", err)
 		return nil

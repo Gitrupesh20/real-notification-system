@@ -5,9 +5,11 @@ import (
 	"github.com/Gitrupesh20/real-time-notification-system/cmd/config"
 	"github.com/Gitrupesh20/real-time-notification-system/internal/domain"
 	"github.com/Gitrupesh20/real-time-notification-system/internal/handler"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/mq/rabbitMq"
 	"github.com/gorilla/websocket"
 	"github.com/rabbitmq/amqp091-go"
 	"log"
+	"strconv"
 )
 
 type CMq interface {
@@ -19,45 +21,52 @@ type CMq interface {
 
 type Consumer struct {
 	config     *config.Config
-	mqConn     *amqp091.Connection
-	mqChannel  *amqp091.Channel
+	messageQ   *rabbitMq.MessageQueue
 	noOfWorker int
 	delivery   <-chan amqp091.Delivery // received only cannel
 	messageCh  chan handler.Message
 }
 
-func NewConsumer(config *config.Config, mqConn *amqp091.Connection, mqChannel *amqp091.Channel) *Consumer {
-	consumer := &Consumer{config: config, mqConn: mqConn, mqChannel: mqChannel, noOfWorker: config.NoOfWorker}
+func NewConsumer(config *config.Config, mq *rabbitMq.MessageQueue) *Consumer {
+	consumer := &Consumer{config: config, messageQ: mq, noOfWorker: config.NoOfWorker}
 
 	//for i := 0; i < config.NoOfWorker; i++ {
-
+	go consumer.startWorkerJob()
 	//}
 	return consumer
 }
 
-func (c *Consumer) startWorker() {
-	log.Println("start worker job")
+func (c *Consumer) startWorkerJob() {
+	for i := 0; i < c.noOfWorker; i++ {
+		go c.startWorker(i)
+	}
+}
 
+func (c *Consumer) startWorker(id int) {
+	log.Println("start worker " + strconv.Itoa(id))
+	deliveryChan, err := c.messageQ.Consume()
+	if err != nil {
+		log.Println("consume error", err)
+		return
+	}
 	for {
-		log.Println("iteration...")
-
 		select {
-		case msg := <-c.delivery:
-			log.Printf("message recevied %v", msg)
-
-			log.Printf("received message from user %s", msg.Body)
+		case msg := <-deliveryChan:
 			var msgSchema handler.Message
-			err := json.Unmarshal(msg.Body, &msgSchema)
+			log.Printf("received message from user %s", msg.Body)
+			err = json.Unmarshal(msg.Body, &msgSchema)
 			if err != nil {
 				log.Printf("failed to unmarshal message from user %s: %v", string(msg.Body), err)
 				continue
 			}
 			sendMessageToAll(msgSchema)
+			if err = msg.Ack(false); err != nil {
+				log.Printf("failed to ack message from user %s: %v", msg.Body, err)
+				continue
+			}
 		}
 	}
-	log.Println("end worker job")
 }
-
 func sendMessageToAll(msg handler.Message) {
 
 	log.Printf("sending message to all users")
@@ -74,34 +83,4 @@ func sendMessageToAll(msg handler.Message) {
 		return true
 	})
 	log.Printf("sended message to all users")
-}
-
-func (c *Consumer) Consume() error {
-	dch, err := c.mqChannel.Consume(c.config.MqQueueName, "", false, false, false, false, nil)
-	if err != nil {
-		log.Printf("failed to consume message from user %s: %v", c.config.MqQueueName, err)
-		return err
-	}
-
-	//select {
-	//case msg := <-dch:
-	//	var msgSchema handler.Message
-	//	log.Printf("received message from user %s", msg.Body)
-	//	err = json.Unmarshal(msg.Body, &msgSchema)
-	//	if err != nil {
-	//		log.Printf("failed to unmarshal message from user %s: %v", string(msg.Body), err)
-	//	}
-	//	c.messageCh <- msgSchema
-	//}
-	c.delivery = dch
-	//for msg := range dch {
-	//
-	//	c.messageCh <- msgSchema
-	//}
-	for i := 0; i < c.config.NoOfWorker; i++ {
-		go c.startWorker()
-	}
-	//go c.startWorker()
-	log.Println("end consume message from user")
-	return nil
 }
