@@ -4,6 +4,7 @@ cmd/logs*
 
 
 cmd/config/*.json
+test
 
 # IDE files
 .idea/
