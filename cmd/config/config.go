@@ -25,7 +25,7 @@ type Config struct {
 
 const (
 	configPath = "./config"
-	configName = "config.json"
+	configName = "config.example.json"
 )
 
 func LoadConfig() Config {

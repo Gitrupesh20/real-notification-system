@@ -1,15 +1,17 @@
 package consumer
 
 import (
+	"context"
 	"encoding/json"
-	"github.com/Gitrupesh20/real-time-notification-system/cmd/config"
-	"github.com/Gitrupesh20/real-time-notification-system/internal/domain"
-	"github.com/Gitrupesh20/real-time-notification-system/internal/handler"
-	"github.com/Gitrupesh20/real-time-notification-system/internal/mq/rabbitMq"
-	"github.com/gorilla/websocket"
-	"github.com/rabbitmq/amqp091-go"
 	"log"
 	"strconv"
+	"time"
+
+	"github.com/Gitrupesh20/real-time-notification-system/cmd/config"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/domain"
+	interfaces "github.com/Gitrupesh20/real-time-notification-system/internal/interface"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/mq/rabbitMq"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/services"
 )
 
 type CMq interface {
@@ -20,15 +22,13 @@ type CMq interface {
 //********************************************* Worker Consumer *********************************************
 
 type Consumer struct {
-	config     *config.Config
-	messageQ   *rabbitMq.MessageQueue
-	noOfWorker int
-	delivery   <-chan amqp091.Delivery // received only cannel
-	messageCh  chan handler.Message
+	messageQ     interfaces.MessageQ
+	noOfWorker   int
+	notification *services.NotificationService
 }
 
-func NewConsumer(config *config.Config, mq *rabbitMq.MessageQueue) *Consumer {
-	consumer := &Consumer{config: config, messageQ: mq, noOfWorker: config.NoOfWorker}
+func NewConsumer(config *config.Config, mq *rabbitMq.MessageQueue, n *services.NotificationService) *Consumer {
+	consumer := &Consumer{messageQ: mq, noOfWorker: config.NoOfWorker, notification: n}
 
 	//for i := 0; i < config.NoOfWorker; i++ {
 	go consumer.startWorkerJob()
@@ -37,50 +37,48 @@ func NewConsumer(config *config.Config, mq *rabbitMq.MessageQueue) *Consumer {
 }
 
 func (c *Consumer) startWorkerJob() {
-	for i := 0; i < c.noOfWorker; i++ {
+	for i := range 20 {
 		go c.startWorker(i)
 	}
 }
 
 func (c *Consumer) startWorker(id int) {
 	log.Println("start worker " + strconv.Itoa(id))
-	deliveryChan, err := c.messageQ.Consume()
-	if err != nil {
-		log.Println("consume error", err)
-		return
-	}
 	for {
-		select {
-		case msg := <-deliveryChan:
-			var msgSchema handler.Message
-			log.Printf("received message from user %s", msg.Body)
+		if !c.messageQ.IsConsumerReady() {
+			log.Println("consumer is not ready, retrying after 100ms")
+			time.Sleep(time.Millisecond * 100)
+			continue
+		}
+
+		deliveryChan, err := c.messageQ.Consume()
+		if err != nil {
+			log.Printf("error while seting up consumer err %v", err)
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		for msg := range deliveryChan {
+			var msgSchema domain.Message
+
 			err = json.Unmarshal(msg.Body, &msgSchema)
 			if err != nil {
 				log.Printf("failed to unmarshal message from user %s: %v", string(msg.Body), err)
+				msg.Nack(false, false)
 				continue
 			}
-			sendMessageToAll(msgSchema)
+			t := time.Now()
+			c.notification.ProcessNotification(context.Background(), &msgSchema)
+
+			log.Printf("total time taken to sent message %v", time.Now().Sub(t))
 			if err = msg.Ack(false); err != nil {
 				log.Printf("failed to ack message from user %s: %v", msg.Body, err)
 				continue
 			}
 		}
+
+		time.Sleep(200 * time.Millisecond)
 	}
-}
-func sendMessageToAll(msg handler.Message) {
+	log.Print("consumer is died", id)
 
-	log.Printf("sending message to all users")
-
-	domain.User.Range(func(key, value interface{}) bool {
-		userId := key.(string)
-		wsConn := value.(*websocket.Conn)
-
-		err := wsConn.WriteJSON(msg)
-		if err != nil {
-			log.Printf("failed to send message to user %s: %v", userId, err)
-			return false
-		}
-		return true
-	})
-	log.Printf("sended message to all users")
 }

@@ -3,12 +3,13 @@ package rabbitMq
 import (
 	"context"
 	"errors"
-	"github.com/Gitrupesh20/real-time-notification-system/cmd/config"
-	error2 "github.com/Gitrupesh20/real-time-notification-system/pkg/error"
-	"github.com/rabbitmq/amqp091-go"
 	"log"
 	"sync"
 	"time"
+
+	"github.com/Gitrupesh20/real-time-notification-system/cmd/config"
+	error2 "github.com/Gitrupesh20/real-time-notification-system/pkg/error"
+	"github.com/rabbitmq/amqp091-go"
 )
 
 type MessageQueue struct {
@@ -119,6 +120,7 @@ func (m *MessageQueue) consumerChannelInit(isShutDown chan bool) {
 		m.consumer.mu.Lock()
 		m.consumer.isReady = true
 		m.consumer.mu.Unlock()
+		log.Print("consumer setup done!")
 
 		//monitor the channel and conn
 		select {
@@ -216,19 +218,19 @@ func (m *MessageQueue) channelInit() (*amqp091.Channel, *amqp091.Queue, error) {
 
 func (m *MessageQueue) Publish(ctx context.Context, data []byte) error {
 
-	m.consumer.mu.Lock()
-	if !m.consumer.isReady {
-		m.consumer.mu.Unlock()
+	m.producer.mu.Lock()
+	if !m.producer.isReady {
+		m.producer.mu.Unlock()
 		return errors.New("publish fail: not ready")
 	}
-	m.consumer.mu.Unlock()
+	m.producer.mu.Unlock()
 
 	if data == nil {
 		log.Printf("Warning Publish: empty data")
 		return errors.New("publish empty data")
 	}
 	for {
-		err := m.consumer.directPublish(ctx, data)
+		err := m.producer.directPublish(ctx, data)
 		if err != nil {
 			select {
 			case <-m.done:
@@ -243,15 +245,15 @@ func (m *MessageQueue) Publish(ctx context.Context, data []byte) error {
 	}
 }
 
-func (c *consumer) directPublish(ctx context.Context, data []byte) error {
-	c.mu.Lock()
-	if !c.isReady {
-		c.mu.Unlock()
+func (p *producer) directPublish(ctx context.Context, data []byte) error {
+	p.mu.Lock()
+	if !p.isReady {
+		p.mu.Unlock()
 		return error2.NoConnectionError
 	}
-	c.mu.Unlock()
+	p.mu.Unlock()
 
-	err := c.ch.PublishWithContext(ctx, "", c.q.Name, false, false, amqp091.Publishing{
+	err := p.ch.PublishWithContext(ctx, "", p.q.Name, false, false, amqp091.Publishing{
 		Body:        data,
 		ContentType: "application/json",
 	})
@@ -261,19 +263,23 @@ func (c *consumer) directPublish(ctx context.Context, data []byte) error {
 	return nil
 }
 
-func (p *producer) Consume() (<-chan amqp091.Delivery, error) {
-	p.mu.Lock()
-	if !p.isReady {
-		p.mu.Unlock()
+func (c *consumer) Consume() (<-chan amqp091.Delivery, error) {
+	c.mu.Lock()
+	if !c.isReady {
+		c.mu.Unlock()
 		return nil, errors.New("consume fail: not ready")
 	}
-	p.mu.Unlock()
-	log.Printf("Consume before")
-	delivery, err := p.ch.Consume(p.q.Name, "", false, false, false, false, nil)
+	c.mu.Unlock()
+
+	if err := c.ch.Qos(10, 0, false); err != nil {
+		return nil, err
+	}
+
+	delivery, err := c.ch.Consume(c.q.Name, "", false, false, false, false, nil)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("consume success")
+	log.Printf("consume started")
 	return delivery, nil
 }
 
@@ -293,4 +299,10 @@ func (m *MessageQueue) Close(ctx context.Context) error {
 	m.producer.ch.Close()
 
 	return nil
+}
+
+func (m *MessageQueue) IsConsumerReady() bool {
+	m.consumer.mu.Lock()
+	defer m.consumer.mu.Unlock()
+	return m.consumer.isReady
 }

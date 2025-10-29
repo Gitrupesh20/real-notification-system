@@ -2,15 +2,16 @@ package handler
 
 import (
 	"fmt"
-	"github.com/Gitrupesh20/real-time-notification-system/cmd/config"
-	"github.com/Gitrupesh20/real-time-notification-system/internal/domain"
-	"github.com/gorilla/websocket"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/Gitrupesh20/real-time-notification-system/cmd/config"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/domain"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/services"
+	"github.com/gorilla/websocket"
 )
 
 // checkOrigin check for the allowed origin
@@ -48,10 +49,10 @@ func (h *WS) checkOrigin(r *http.Request) bool {
 type WS struct {
 	config  config.Config
 	upgrade websocket.Upgrader
-	Users   sync.Map
+	user    *services.UserService
 }
 
-func NewWS(config config.Config) *WS {
+func NewWS(config config.Config, userServices *services.UserService) *WS {
 	ws := &WS{
 		config: config,
 		upgrade: websocket.Upgrader{
@@ -60,6 +61,7 @@ func NewWS(config config.Config) *WS {
 			WriteBufferSize:   config.WriteBufferSize,
 			EnableCompression: true,
 		},
+		user: userServices,
 	}
 
 	ws.upgrade.CheckOrigin = ws.checkOrigin
@@ -80,45 +82,35 @@ func (h *WS) WsHandler(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("req for conn is come userId:", userId)
 
-	wsConn, err := h.upgrade.Upgrade(w, r, nil)
+	rawWsconn, err := h.upgrade.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("error while upgrading conn", err)
 		return
 	}
+	wsConn := domain.NewUser(userId, rawWsconn)
 
 	// if exits disconnect older
-	if existing, ok := domain.User.Swap(userId, wsConn); ok {
-		oldConn := existing.(*websocket.Conn)
-		if err = CloseWsConn(oldConn, websocket.ClosePolicyViolation, "New Login Detected"); err != nil {
-			log.Println("error closing user conn", err)
-		}
+	if _, err := h.user.ConnectUser(wsConn); err != nil {
+		//bypass the error as swap store new user
+		log.Printf("new user login %v", err)
 	}
 
+	go wsConn.WriteData() // start writer worker for each user
+
 	defer func() {
-		if current, ok := domain.User.Load(userId); ok {
-			if current.(*websocket.Conn) == wsConn {
-				domain.User.Delete(userId)
-			}
+		log.Print("inside defer close fns ws connn")
+		if err := h.user.DisconnectUser(userId, wsConn); err != nil {
+			log.Printf("error while closing conn err: %v", err)
+			rawWsconn.Close() // close forcefully
 		}
-		wsConn.Close()
 	}()
 
 	//hold to conn
 	for {
-		_, _, err = wsConn.ReadMessage()
+		_, _, err = wsConn.Conn.ReadMessage()
 		if err != nil {
 			log.Println("closing connection ", err)
 			break
 		}
 	}
-}
-
-func CloseWsConn(conn *websocket.Conn, code int, text string) error {
-
-	errMsg := websocket.FormatCloseMessage(code, text)
-
-	_ = conn.WriteControl(websocket.CloseMessage, errMsg, time.Now().Add(time.Second*2))
-
-	_ = conn.Close()
-	return nil
 }

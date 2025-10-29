@@ -1,16 +1,17 @@
 package main
 
 import (
-	"errors"
-	"github.com/Gitrupesh20/real-time-notification-system/cmd/config"
-	"github.com/Gitrupesh20/real-time-notification-system/internal/mq/consumer"
-	"github.com/Gitrupesh20/real-time-notification-system/internal/mq/rabbitMq"
-	"github.com/Gitrupesh20/real-time-notification-system/internal/server"
-	"github.com/rabbitmq/amqp091-go"
 	"log"
 	"net/http"
-	"strings"
 	"time"
+
+	"github.com/Gitrupesh20/real-time-notification-system/cmd/config"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/handler"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/mq/consumer"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/mq/rabbitMq"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/repo"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/server"
+	"github.com/Gitrupesh20/real-time-notification-system/internal/services"
 )
 
 func main() {
@@ -18,39 +19,26 @@ func main() {
 
 	mq := rabbitMq.NewRabbitMessageQueue(conf)
 
-	<-time.After(1 * time.Second)
-	//setup route and producer
-	newRoute := server.NewRoute(&conf, mq)
-	handler := newRoute.RegisterRoute()
-	if handler == nil {
-		log.Fatal("handler is nil")
-		return
-	}
-	//setup consumer and worker
+	userRepo := repo.NewUserRepo()
 
-	_ = consumer.NewConsumer(&conf, mq)
-	//start
+	userServices := services.NewUserService(userRepo)
+	notificaionServices := services.NewNotificationService(mq, userServices)
 
-	log.Printf("Server Started in port %s....", conf.Port)
-	if err := http.ListenAndServe(":"+conf.Port, handler); err != nil {
-		log.Fatal(err)
-	}
-	log.Println("done")
+	wsHandler := handler.NewWS(conf, userServices)
+	notificationHandler := handler.NewPushNotificationHandler(notificaionServices)
 
-}
+	routes := server.NewRoute(&conf, wsHandler, notificationHandler)
+	handler := routes.RegisterRoute()
 
-func connectRabbitMq(addr string, queueName string) (*amqp091.Connection, error) {
-	if addr == "" {
-		return nil, errors.New("addr is empty")
-	} else if queueName == "" {
-		return nil, errors.New("queue name is empty")
-	} else if !strings.HasPrefix(addr, "amqp://") {
-		return nil, errors.New("amqp url is invalid, it should start with 'amqp://'")
-	}
+	_ = consumer.NewConsumer(&conf, mq, notificaionServices)
 
-	conn, err := amqp091.Dial(addr)
+	//give some time to goroutine to settel down
+	<-time.After(time.Microsecond * 100)
+
+	log.Print("Starting Server at port 8080...")
+	err := http.ListenAndServe(":"+conf.Port, handler)
 	if err != nil {
-		return nil, err
+		log.Fatal("error while stating server at port 8080", err)
 	}
-	return conn, nil
+
 }
