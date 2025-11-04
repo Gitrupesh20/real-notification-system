@@ -90,6 +90,6 @@ it uses worker base consumer to consumer message from queue and process them and
 * Horizontal scaling with multiple RabbitMQ consumers
 
 ---
-
+**Note: This project still in dev phase**
 
 
